@@ -1,5 +1,6 @@
 ## Interface: 16001
 ## X-Curse-Project-ID: 1724968
+## X-Wago-ID: XKqERwKy
 ## Title: Campfire Hangout
 ## Notes: Standing lineup while Welcoming Campfire is active
 ## Author: xOkamiyasha
