@@ -1,0 +1,9 @@
+package-as: CampfireHangout
+
+ignore:
+  - .github
+  - .gitignore
+  - .pkgmeta
+
+optional-dependencies:
+  - libsharedmedia-3-0
