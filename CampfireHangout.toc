@@ -8,9 +8,6 @@
 ## SavedVariables: CampfireHangoutDB
 ## IconTexture: Interface\AddOns\CampfireHangout\Textures\Icon
 
-# Copy this folder into the Forever client's Interface\AddOns directory, then /reload.
-# Preview with /cfh. It also opens on its own when you gain Welcoming Campfire.
-
 Util.lua
 Scene.lua
 Core.lua
