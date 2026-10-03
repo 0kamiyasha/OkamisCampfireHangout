@@ -41,6 +41,9 @@ local function DB()
 	if CampfireHangoutDB.enabled == nil then
 		CampfireHangoutDB.enabled = true
 	end
+	if CampfireHangoutDB.showGameChat == nil then
+		CampfireHangoutDB.showGameChat = false
+	end
 	return CampfireHangoutDB
 end
 
@@ -844,9 +847,40 @@ local function RegisterOptions()
 			OpenMenu()
 		end
 	end)
-	panel:SetScript("OnShow", RefreshDropdown)
+	local chatCheck = CreateFrame("CheckButton", nil, panel)
+	chatCheck:SetSize(26, 26)
+	chatCheck:SetPoint("TOPLEFT", fontLabel, "BOTTOMLEFT", -4, -18)
+	chatCheck:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+	chatCheck:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+	chatCheck:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight", "ADD")
+	chatCheck:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+	local chatLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+	chatLabel:SetPoint("LEFT", chatCheck, "RIGHT", 4, 0)
+	chatLabel:SetText("Show normal chat")
+	local chatHint = panel:CreateFontString(nil, "ARTWORK", "GameFontDisable")
+	chatHint:SetPoint("TOPLEFT", chatLabel, "BOTTOMLEFT", 0, -2)
+	chatHint:SetWidth(460)
+	chatHint:SetJustifyH("LEFT")
+	chatHint:SetText("Puts the game chat window above the hangout, so guild and the other channels stay visible.")
+
+	local function RefreshChatToggle()
+		chatCheck:SetChecked(DB().showGameChat == true)
+	end
+
+	chatCheck:SetScript("OnClick", function(self)
+		DB().showGameChat = self:GetChecked() and true or false
+		if H.Scene and H.Scene.ApplyGameChat then
+			H.Scene:ApplyGameChat()
+		end
+	end)
+
+	panel:SetScript("OnShow", function()
+		RefreshDropdown()
+		RefreshChatToggle()
+	end)
 	panel:SetScript("OnHide", CloseMenu)
 	RefreshDropdown()
+	RefreshChatToggle()
 
 	if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
 		local ok, category = pcall(Settings.RegisterCanvasLayoutCategory, panel, panel.name)

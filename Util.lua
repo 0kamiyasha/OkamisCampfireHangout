@@ -6,7 +6,7 @@ local H = CampfireHangout
 H.NAME = ADDON_NAME
 H.BUFF_NAME = "Welcoming Campfire"
 H.PREFIX = "CFHangout"
-H.MAX_SLOTS = 6
+H.MAX_SLOTS = 5
 
 function H.Sealed(value)
 	if type(issecretvalue) ~= "function" then

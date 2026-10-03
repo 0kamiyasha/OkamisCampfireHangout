@@ -477,7 +477,7 @@ local function LayoutDolls()
 
 			if slot.bubbleFrame then
 				slot.bubbleFrame:ClearAllPoints()
-				slot.bubbleFrame:SetPoint("BOTTOM", slot.name, "TOP", 0, 6)
+				slot.bubbleFrame:SetPoint("LEFT", frame, "BOTTOMLEFT", cx + sw * 0.22, above + 8)
 			end
 
 			if above + 34 > crown then
@@ -839,14 +839,19 @@ local function BuildDollSlot(parent, textParent, index)
 		key = nil,
 	}
 
-	local bubbleFrame = CreateFrame("Frame", nil, textParent)
-	bubbleFrame:SetSize(176, 52)
-	bubbleFrame:SetFrameLevel(280)
+	local bubbleFrame = CreateFrame("Frame", nil, parent)
+	bubbleFrame:SetSize(220, 48)
+	bubbleFrame:SetFrameLevel(340)
 	bubbleFrame:EnableMouse(false)
 	bubbleFrame:Hide()
 	local bubbleBg = bubbleFrame:CreateTexture(nil, "BACKGROUND")
 	bubbleBg:SetAllPoints()
 	bubbleBg:SetColorTexture(0.06, 0.035, 0.02, 0.9)
+	local tail = bubbleFrame:CreateTexture(nil, "BORDER")
+	tail:SetSize(12, 12)
+	tail:SetColorTexture(0.06, 0.035, 0.02, 0.9)
+	tail:SetPoint("RIGHT", bubbleFrame, "LEFT", 6, -8)
+	pcall(tail.SetRotation, tail, math.rad(45))
 	local bubble = bubbleFrame:CreateFontString(nil, "OVERLAY")
 	H.SetFont(bubble, FONT_BODY, 13)
 	bubble:SetTextColor(0.96, 0.91, 0.78)
@@ -906,7 +911,12 @@ local chatText
 local chatPrompt
 local chatEntry
 local chatPlaceholder
+local chatFont
 local chatSending = false
+local lastChatLine
+local pendingEcho
+local pendingEchoAt
+local pendingToken
 local chatHooked = false
 local liftedEdit
 local savedParent
@@ -957,7 +967,59 @@ local function TickBubbles()
 	end
 end
 
-local function ShowChat(speaker, text)
+local function ShowBubble(slot, text)
+	if not slot or not slot.bubble or not slot.bubbleFrame then
+		return
+	end
+	H.SetText(slot.bubble, text)
+	slot.bubbleUntil = GetTime() + 8
+	slot.bubbleFrame:Show()
+	slot.bubbleFrame:Raise()
+end
+
+local function RefreshChatLog()
+	if not chatText then
+		return
+	end
+	H.SetText(chatText, table.concat(chatLines, "\n"))
+	local panel = chatText:GetParent()
+	if GameChatWanted() then
+		if panel then
+			panel:Hide()
+		end
+		return
+	end
+	if panel and #chatLines > 0 then
+		panel:Show()
+	end
+end
+
+local function AppendChatLine(line)
+	if line == lastChatLine then
+		return
+	end
+	if #chatLines > 0 and chatLines[#chatLines] == line then
+		return
+	end
+	lastChatLine = line
+	chatLines[#chatLines + 1] = line
+	while #chatLines > 5 do
+		table.remove(chatLines, 1)
+	end
+	RefreshChatLog()
+end
+
+local function ReplaceChatLine(line)
+	if #chatLines > 0 then
+		chatLines[#chatLines] = line
+	else
+		chatLines[1] = line
+	end
+	lastChatLine = line
+	RefreshChatLog()
+end
+
+local function ShowChat(speaker, text, fromPlayer)
 	if type(speaker) ~= "string" or type(text) ~= "string" then
 		return
 	end
@@ -967,22 +1029,24 @@ local function ShowChat(speaker, text)
 	if #text > 140 then
 		text = text:sub(1, 137) .. "..."
 	end
-	chatLines[#chatLines + 1] = speaker .. ": " .. text
-	while #chatLines > 5 do
-		table.remove(chatLines, 1)
+	local echoed = not fromPlayer and pendingEcho == text and pendingEchoAt and (GetTime() - pendingEchoAt) < 3
+	if echoed then
+		pendingEcho = nil
+		pendingEchoAt = nil
+		pendingToken = nil
 	end
-	if chatText then
-		H.SetText(chatText, table.concat(chatLines, "\n"))
-		chatText:GetParent():Show()
+	local line = (speaker:match("^([^%-]+)") or speaker) .. ": " .. text
+	if fromPlayer then
+		-- The chat echo carries the name other players see. Hold the log for that.
+	elseif echoed and #chatLines > 0 and chatLines[#chatLines]:sub(-(#text + 2)) == (": " .. text) then
+		ReplaceChatLine(line)
+	else
+		AppendChatLine(line)
 	end
 	for i, entry in ipairs(currentEntries) do
-		if NameMatches(entry.unit, speaker) then
-			local slot = slots[i]
-			if slot and slot.bubble and slot.bubbleFrame then
-				H.SetText(slot.bubble, text)
-				slot.bubbleUntil = GetTime() + 8
-				slot.bubbleFrame:Show()
-			end
+		local mine = (fromPlayer or echoed) and (entry.unit == "player" or H.SafeTrue(UnitIsUnit, entry.unit, "player"))
+		if mine or NameMatches(entry.unit, speaker) then
+			ShowBubble(slots[i], text)
 		end
 	end
 end
@@ -1412,16 +1476,6 @@ local function LiftChatEdit(edit)
 	end
 end
 
-local function ActiveChatEdit()
-	if ACTIVE_CHAT_EDIT_BOX and ACTIVE_CHAT_EDIT_BOX.IsShown and ACTIVE_CHAT_EDIT_BOX:IsShown() then
-		return ACTIVE_CHAT_EDIT_BOX
-	end
-	local edit = ChatFrame1EditBox
-	if edit and edit:IsShown() then
-		return edit
-	end
-end
-
 local function UpdateChatPlaceholder()
 	if not chatPlaceholder or not chatEntry then
 		return
@@ -1443,42 +1497,593 @@ local function SendChatLine(text)
 	if text == "" then
 		return
 	end
+	local slash = text:sub(1, 1) == "/"
+	if not slash then
+		pendingEcho = text
+		if #pendingEcho > 140 then
+			pendingEcho = pendingEcho:sub(1, 137) .. "..."
+		end
+		pendingEchoAt = GetTime()
+	end
 	local edit = ChatFrame1EditBox
-	if edit and type(ChatEdit_ParseText) == "function" then
+	local sent = false
+	if slash and edit and type(ChatEdit_ParseText) == "function" then
 		chatSending = true
 		edit:SetText(text)
-		pcall(ChatEdit_ParseText, edit, 1)
+		sent = pcall(ChatEdit_ParseText, edit, 1)
 		edit:SetText("")
 		if edit:IsShown() then
 			edit:Hide()
 		end
 		chatSending = false
-	elseif type(SendChatMessage) == "function" then
-		SendChatMessage(text, "SAY")
 	end
+	if not sent then
+		if C_ChatInfo and type(C_ChatInfo.SendChatMessage) == "function" then
+			sent = pcall(C_ChatInfo.SendChatMessage, text, "SAY")
+		end
+		if not sent and type(SendChatMessage) == "function" then
+			pcall(SendChatMessage, text, "SAY")
+		end
+	end
+	if not slash then
+		local name = "You"
+		local ok, unitName = pcall(UnitName, "player")
+		if ok and type(unitName) == "string" and unitName ~= "" and not H.Sealed(unitName) then
+			name = unitName
+		end
+		local token = {}
+		pendingToken = token
+		local spoken = pendingEcho or text
+		ShowChat(name, text, true)
+		C_Timer.After(1, function()
+			if pendingToken ~= token or pendingEcho ~= spoken then
+				return
+			end
+			pendingToken = nil
+			pendingEcho = nil
+			pendingEchoAt = nil
+			AppendChatLine(name .. ": " .. spoken)
+		end)
+	end
+end
+
+local function SubmitChatEntry(edit)
+	if chatSending or not edit then
+		return
+	end
+	local text = edit:GetText() or ""
+	text = text:match("^%s*(.-)%s*$") or ""
+	if text == "" then
+		return
+	end
+	edit:SetText("")
+	SendChatLine(text)
+	UpdateChatPlaceholder()
+end
+
+local function ChatEntryFont()
+	if not chatFont then
+		chatFont = _G.CampfireHangoutChatFont or CreateFont("CampfireHangoutChatFont")
+	end
+	if not chatFont then
+		return nil
+	end
+	chatFont:SetFont(FONT_BODY, 15, "")
+	if not chatFont:GetFont() then
+		chatFont:SetFont("Fonts\\FRIZQT__.TTF", 15, "")
+	end
+	chatFont:SetTextColor(0.96, 0.9, 0.75)
+	chatFont:SetShadowColor(0, 0, 0, 1)
+	chatFont:SetShadowOffset(1, -1)
+	return chatFont
+end
+
+local function ApplyChatEntryFont()
+	if not chatEntry then
+		return
+	end
+	local font = ChatEntryFont()
+	if font and font:GetFont() then
+		chatEntry:SetFontObject(font)
+	elseif ChatFontNormal then
+		chatEntry:SetFontObject(ChatFontNormal)
+	end
+	chatEntry:SetTextColor(0.96, 0.9, 0.75)
+end
+
+local function BlizzardChatBoxes()
+	local list = {}
+	local seen = {}
+	local function add(edit)
+		if edit and edit ~= chatEntry and not seen[edit] then
+			seen[edit] = true
+			list[#list + 1] = edit
+		end
+	end
+	add(ACTIVE_CHAT_EDIT_BOX)
+	add(ChatFrame1EditBox)
+	return list
+end
+
+local function TakeBlizzardChat()
+	if chatSending or not chatEntry then
+		return false
+	end
+	local took = false
+	for _, edit in ipairs(BlizzardChatBoxes()) do
+		local shown = edit.IsShown and edit:IsShown()
+		local focused = edit.HasFocus and edit:HasFocus()
+		if shown or focused then
+			local ok, text = pcall(edit.GetText, edit)
+			if ok and type(text) == "string" and text ~= "" and not H.Sealed(text) then
+				local current = chatEntry:GetText() or ""
+				if current == "" or #text > #current then
+					chatEntry:SetText(text)
+					pcall(chatEntry.SetCursorPosition, chatEntry, #text)
+				end
+				pcall(edit.SetText, edit, "")
+			end
+			pcall(edit.ClearFocus, edit)
+			if shown then
+				edit:Hide()
+			end
+			took = true
+		end
+	end
+	return took
 end
 
 local function FocusChatEntry()
 	if chatSending or not frame or not frame:IsShown() or not chatEntry then
 		return
 	end
-	if ChatFrame1EditBox and ChatFrame1EditBox:IsShown() then
-		ChatFrame1EditBox:Hide()
-	end
-	if ACTIVE_CHAT_EDIT_BOX and ACTIVE_CHAT_EDIT_BOX ~= chatEntry and ACTIVE_CHAT_EDIT_BOX.IsShown and ACTIVE_CHAT_EDIT_BOX:IsShown() then
-		ACTIVE_CHAT_EDIT_BOX:Hide()
-	end
+	ApplyChatEntryFont()
+	TakeBlizzardChat()
 	chatEntry:SetFocus()
 	UpdateChatPlaceholder()
 end
 
-local function SyncChatEdit()
-	if chatSending or not frame or not frame:IsShown() then
+local raisedChat = {}
+local chatHost
+local PlaceHangoutEntry
+
+local function GameChatWanted()
+	local saved = CampfireHangoutDB
+	return type(saved) == "table" and saved.showGameChat == true and frame and frame:IsShown()
+end
+
+local function RestorePoints(widget, points)
+	widget:ClearAllPoints()
+	for i = 1, #points do
+		local point, relativeTo, relativePoint, x, y = points[i][1], points[i][2], points[i][3], points[i][4], points[i][5]
+		if relativeTo then
+			widget:SetPoint(point, relativeTo, relativePoint, x, y)
+		else
+			widget:SetPoint(point, UIParent, relativePoint or "CENTER", x or 0, y or 0)
+		end
+	end
+end
+
+local function RestoreGameChat()
+	local pending = raisedChat
+	raisedChat = {}
+	for widget, saved in pairs(pending) do
+		pcall(function()
+			widget:SetParent(saved.parent or UIParent)
+			if saved.strata then
+				widget:SetFrameStrata(saved.strata)
+			end
+			if type(saved.level) == "number" then
+				widget:SetFrameLevel(saved.level)
+			end
+			if saved.points then
+				RestorePoints(widget, saved.points)
+			end
+			if saved.shown == false and widget.Hide then
+				widget:Hide()
+			end
+		end)
+	end
+	if PlaceHangoutEntry then
+		PlaceHangoutEntry()
+	end
+end
+
+local function Outermost(widget)
+	local current = widget
+	while current do
+		local parent = current:GetParent()
+		if not parent or parent == UIParent or parent == chatHost or parent == frame then
+			return current
+		end
+		current = parent
+	end
+	return widget
+end
+
+local function LiftWidget(widget, direct, levelOffset)
+	if not widget or not chatHost or not widget.GetFrameLevel or not widget.SetParent or not widget.SetFrameStrata then
 		return
 	end
-	local edit = ActiveChatEdit()
-	if edit and edit ~= chatEntry then
-		FocusChatEntry()
+	if not direct then
+		widget = Outermost(widget)
+	end
+	if not widget or widget == frame or widget == UIParent or widget == chatHost then
+		return
+	end
+	if raisedChat[widget] and widget:GetParent() == chatHost then
+		pcall(widget.SetFrameLevel, widget, (chatHost:GetFrameLevel() or 200) + (levelOffset or 10))
+		return
+	end
+	local points = {}
+	local count = widget.GetNumPoints and widget:GetNumPoints() or 0
+	for i = 1, count do
+		points[i] = { widget:GetPoint(i) }
+	end
+	if not raisedChat[widget] then
+		raisedChat[widget] = {
+			parent = widget:GetParent(),
+			strata = widget:GetFrameStrata(),
+			level = widget:GetFrameLevel(),
+			points = points,
+			shown = widget.IsShown and widget:IsShown() or false,
+		}
+	end
+	local saved = raisedChat[widget]
+	local ok = pcall(function()
+		widget:SetParent(chatHost)
+		widget:SetFrameStrata("TOOLTIP")
+		widget:SetFrameLevel((chatHost:GetFrameLevel() or 200) + (levelOffset or 10))
+		if widget.EnableMouse then
+			widget:EnableMouse(true)
+		end
+		if saved.points and #saved.points > 0 then
+			RestorePoints(widget, saved.points)
+		end
+	end)
+	if not ok then
+		raisedChat[widget] = nil
+		pcall(widget.SetFrameStrata, widget, "TOOLTIP")
+	end
+end
+
+local customChat
+local customChatTries = 0
+local nextEditScan = 0
+
+local function AddonLoaded(name)
+	if C_AddOns and C_AddOns.IsAddOnLoaded then
+		local ok, loaded = pcall(C_AddOns.IsAddOnLoaded, name)
+		if ok and loaded then
+			return true
+		end
+	end
+	if type(IsAddOnLoaded) == "function" then
+		local ok, loaded = pcall(IsAddOnLoaded, name)
+		return ok and loaded
+	end
+	return false
+end
+
+local function ReplacementAddon()
+	return AddonLoaded("Chattynator") or AddonLoaded("ElvUI")
+end
+
+local function FrameName(widget)
+	if not widget or not widget.GetName then
+		return ""
+	end
+	local ok, name = pcall(widget.GetName, widget)
+	if ok and type(name) == "string" then
+		return name
+	end
+	return ""
+end
+
+local function LooksLikeCustomChat(widget)
+	if not widget or widget == frame or widget == chatHost or widget == chatPrompt or widget == chatEntry then
+		return false
+	end
+	if not widget.IsShown or not widget:IsShown() then
+		return false
+	end
+	local name = FrameName(widget)
+	if name:match("^ChatFrame%d") or name == "GeneralDockManager" or name:find("HyperlinkHandler", 1, true) then
+		return false
+	end
+	if type(widget.ScrollingMessages) == "table" then
+		return true
+	end
+	if name:find("Chattynator", 1, true) or name:find("ElvUI_Chat", 1, true) then
+		local w = widget.GetWidth and widget:GetWidth()
+		local h = widget.GetHeight and widget:GetHeight()
+		return type(w) == "number" and w > 180 and type(h) == "number" and h > 80
+	end
+	return false
+end
+
+local function FindCustomChat()
+	if customChat and customChat.GetParent and customChat:GetParent() then
+		return customChat
+	end
+	if customChatTries > 20 or type(EnumerateFrames) ~= "function" then
+		return nil
+	end
+	customChatTries = customChatTries + 1
+	local current = EnumerateFrames()
+	local guard = 0
+	while current and guard < 6000 do
+		guard = guard + 1
+		if LooksLikeCustomChat(current) then
+			customChat = current
+			return current
+		end
+		current = EnumerateFrames(current)
+	end
+	return nil
+end
+
+local function IsChatEdit(edit)
+	if not edit or edit == chatEntry or edit == chatPrompt then
+		return false
+	end
+	if not edit.GetObjectType or edit:GetObjectType() ~= "EditBox" then
+		return false
+	end
+	local name = FrameName(edit)
+	if name:find("Wardrobe", 1, true) or name:find("CustomSet", 1, true) then
+		return false
+	end
+	if edit == ACTIVE_CHAT_EDIT_BOX then
+		return true
+	end
+	if name:match("^ChatFrame%d+EditBox") or name:find("Chattynator", 1, true) then
+		return true
+	end
+	local parentName = FrameName(edit.GetParent and edit:GetParent())
+	if parentName:find("Chattynator", 1, true) or parentName:match("^ChatFrame") then
+		return true
+	end
+	return false
+end
+
+local function CollectChatEdits(widget, depth, seen, boxes)
+	if not widget or depth > 5 or seen[widget] then
+		return
+	end
+	seen[widget] = true
+	if IsChatEdit(widget) or (widget.GetObjectType and widget:GetObjectType() == "EditBox" and widget ~= chatEntry and FrameName(widget):find("Wardrobe", 1, true) == nil and FrameName(widget):find("CustomSet", 1, true) == nil and depth > 0) then
+		if widget.GetObjectType and widget:GetObjectType() == "EditBox" and widget ~= chatEntry then
+			local name = FrameName(widget)
+			if name:find("Wardrobe", 1, true) == nil and name:find("CustomSet", 1, true) == nil then
+				boxes[#boxes + 1] = widget
+			end
+		end
+	end
+	if widget.GetChildren then
+		local children = { widget:GetChildren() }
+		for i = 1, #children do
+			CollectChatEdits(children[i], depth + 1, seen, boxes)
+		end
+	end
+	for _, key in ipairs({ "EditBox", "editBox", "entry", "EntryBox", "ChatEdit", "input", "InputBox" }) do
+		local field = widget[key]
+		if type(field) == "table" then
+			CollectChatEdits(field, depth + 1, seen, boxes)
+		end
+	end
+end
+
+local function LiftOpenChatEdit()
+	local boxes = {}
+	local function add(edit)
+		if IsChatEdit(edit) then
+			boxes[#boxes + 1] = edit
+		end
+	end
+	add(ACTIVE_CHAT_EDIT_BOX)
+	local windows = NUM_CHAT_WINDOWS
+	if type(windows) ~= "number" or windows < 1 then
+		windows = 10
+	end
+	for i = 1, windows do
+		add(_G["ChatFrame" .. i .. "EditBox"])
+	end
+	local treeBoxes = {}
+	if customChat then
+		local seen = {}
+		CollectChatEdits(customChat, 0, seen, treeBoxes)
+		local outer = Outermost(customChat)
+		if outer and outer ~= customChat then
+			CollectChatEdits(outer, 0, seen, treeBoxes)
+		end
+	end
+	for i = 1, #treeBoxes do
+		LiftWidget(treeBoxes[i], true, 70)
+	end
+	for i = 1, #boxes do
+		LiftWidget(boxes[i], true, 70)
+	end
+end
+
+local function VisibleChatWindow()
+	if customChat and type(customChat.ScrollingMessages) == "table" and customChat.IsShown and customChat:IsShown() then
+		return customChat
+	end
+	local handler
+	if type(Chattynator) == "table" and type(Chattynator.API) == "table" and type(Chattynator.API.GetHyperlinkHandler) == "function" then
+		local ok, value = pcall(Chattynator.API.GetHyperlinkHandler)
+		if ok then
+			handler = value
+		end
+	end
+	if handler and handler.GetChildren then
+		local children = { handler:GetChildren() }
+		for i = 1, #children do
+			local child = children[i]
+			if child and type(child.ScrollingMessages) == "table" and child.IsShown and child:IsShown() then
+				return child
+			end
+		end
+	end
+	return customChat
+end
+
+local function RevealGameChatEdit()
+	if not GameChatWanted() or not chatHost then
+		return
+	end
+	local edit = ChatFrame1EditBox
+	if ACTIVE_CHAT_EDIT_BOX and IsChatEdit(ACTIVE_CHAT_EDIT_BOX) then
+		edit = ACTIVE_CHAT_EDIT_BOX
+	end
+	if not IsChatEdit(edit) then
+		return
+	end
+	LiftWidget(edit, true, 90)
+	local anchor = VisibleChatWindow()
+	if anchor == edit or anchor == chatHost or anchor == frame then
+		anchor = nil
+	end
+	if anchor and FrameName(anchor):find("HyperlinkHandler", 1, true) then
+		anchor = nil
+	end
+	if not edit._cfhKeepShown then
+		edit._cfhKeepShown = true
+		edit:HookScript("OnHide", function(self)
+			if not GameChatWanted() or self._cfhReshowing then
+				return
+			end
+			self._cfhReshowing = true
+			C_Timer.After(0, function()
+				self._cfhReshowing = nil
+				if GameChatWanted() then
+					self:Show()
+				end
+			end)
+		end)
+	end
+	pcall(function()
+		edit:SetParent(UIParent)
+		edit:SetFrameStrata("TOOLTIP")
+		edit:SetFrameLevel(500)
+		edit:SetAlpha(1)
+		edit:ClearAllPoints()
+		if anchor then
+			edit:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 2)
+			edit:SetPoint("BOTTOMRIGHT", anchor, "TOPRIGHT", 0, 2)
+		else
+			edit:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 24, 220)
+			edit:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMLEFT", 480, 220)
+		end
+		edit:SetHeight(28)
+		if edit.EnableMouse then
+			edit:EnableMouse(true)
+		end
+		edit:Show()
+	end)
+end
+
+function PlaceHangoutEntry()
+	if not chatPrompt or not frame then
+		return
+	end
+	chatPrompt:ClearAllPoints()
+	if GameChatWanted() then
+		RevealGameChatEdit()
+		chatPrompt:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 16)
+		if chatText and chatText.GetParent then
+			local panel = chatText:GetParent()
+			if panel then
+				panel:Hide()
+			end
+		end
+	else
+		chatPrompt:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 12)
+	end
+	if chatEntry then
+		chatEntry:ClearAllPoints()
+		chatEntry:SetPoint("TOPLEFT", chatPrompt, "TOPLEFT", 0, 0)
+		chatEntry:SetPoint("BOTTOMRIGHT", chatPrompt, "BOTTOMRIGHT", 0, 0)
+	end
+end
+
+local function ApplyGameChat()
+	if not GameChatWanted() or not chatHost then
+		RestoreGameChat()
+		return
+	end
+	chatHost:SetFrameLevel((frame:GetFrameLevel() or 200) + 80)
+	chatHost:Show()
+	if ReplacementAddon() then
+		local root = FindCustomChat()
+		if root then
+			local outer = Outermost(root)
+			local tooBig = false
+			if outer and outer.GetWidth and frame.GetWidth then
+				local w, h = outer:GetWidth(), outer:GetHeight()
+				local sw, sh = frame:GetWidth(), frame:GetHeight()
+				tooBig = type(w) == "number" and type(sw) == "number" and sw > 0 and w > sw * 0.85 and type(h) == "number" and type(sh) == "number" and h > sh * 0.85
+			end
+			if tooBig then
+				LiftWidget(root, true, 20)
+			else
+				LiftWidget(root)
+			end
+		elseif customChatTries <= 20 then
+			LiftOpenChatEdit()
+			PlaceHangoutEntry()
+			return
+		end
+		LiftOpenChatEdit()
+		PlaceHangoutEntry()
+		return
+	end
+	local windows = NUM_CHAT_WINDOWS
+	if type(windows) ~= "number" or windows < 1 then
+		windows = 10
+	end
+	for i = 1, windows do
+		local chat = _G["ChatFrame" .. i]
+		if chat and chat.IsShown and chat:IsShown() then
+			LiftWidget(chat)
+		end
+		local tab = _G["ChatFrame" .. i .. "Tab"] or (chat and chat.Tab)
+		if tab and tab.IsShown and tab:IsShown() then
+			LiftWidget(tab, true, 40)
+		end
+	end
+	if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.IsShown and DEFAULT_CHAT_FRAME:IsShown() then
+		LiftWidget(DEFAULT_CHAT_FRAME)
+	end
+	if GeneralDockManager and GeneralDockManager.IsShown and GeneralDockManager:IsShown() then
+		LiftWidget(GeneralDockManager)
+	end
+	for _, name in ipairs({
+		"ChatFrameMenuButton",
+		"ChatFrameChannelButton",
+		"ChatFrameToggleVoiceDeafenButton",
+		"ChatFrameToggleVoiceMuteButton",
+	}) do
+		local widget = _G[name]
+		if widget and widget.IsShown and widget:IsShown() then
+			LiftWidget(widget, true, 20)
+		end
+	end
+	LiftOpenChatEdit()
+	PlaceHangoutEntry()
+end
+
+local function SyncChatEdit()
+	if chatSending or not frame or not frame:IsShown() or not chatEntry or GameChatWanted() then
+		return
+	end
+	if chatEntry.HasFocus and chatEntry:HasFocus() then
+		return
+	end
+	if TakeBlizzardChat() then
+		chatEntry:SetFocus()
+		UpdateChatPlaceholder()
 	end
 end
 
@@ -1488,10 +2093,19 @@ local function HookChatEdits()
 	end
 	chatHooked = true
 	hooksecurefunc("ChatFrame_OpenChat", function()
+		if GameChatWanted() then
+			C_Timer.After(0, LiftOpenChatEdit)
+			return
+		end
 		if chatSending or not frame or not frame:IsShown() then
 			return
 		end
 		C_Timer.After(0, function()
+			if not frame or not frame:IsShown() or chatSending or GameChatWanted() then
+				return
+			end
+			TakeBlizzardChat()
+			SubmitChatEntry(chatEntry)
 			FocusChatEntry()
 		end)
 	end)
@@ -1509,6 +2123,11 @@ local function Build()
 	frame:EnableMouse(true)
 	frame:EnableMouseWheel(true)
 	frame:Hide()
+
+	chatHost = CreateFrame("Frame", nil, frame)
+	chatHost:SetAllPoints(frame)
+	chatHost:SetFrameLevel(280)
+	chatHost:EnableMouse(false)
 
 	local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -1)
 	bg:SetAllPoints()
@@ -1595,57 +2214,73 @@ local function Build()
 		fire:Hide()
 	end
 
-	local chatFrame = CreateFrame("Frame", nil, frame)
-	chatFrame:SetSize(280, 96)
-	chatFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 28, -130)
-	chatFrame:SetFrameLevel(230)
-	chatFrame:EnableMouse(false)
-	chatFrame:Hide()
-	chatText = chatFrame:CreateFontString(nil, "OVERLAY")
-	H.SetFont(chatText, FONT_BODY, 13)
-	chatText:SetTextColor(0.9, 0.84, 0.7)
-	chatText:SetJustifyH("LEFT")
-	chatText:SetJustifyV("TOP")
-	chatText:SetWordWrap(true)
-	chatText:SetAllPoints()
-	chatText:SetShadowColor(0, 0, 0, 1)
-
 	chatPrompt = CreateFrame("Frame", nil, frame)
-	chatPrompt:SetSize(320, 28)
+	chatPrompt:SetSize(420, 36)
 	chatPrompt:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 12)
 	chatPrompt:SetFrameLevel(300)
+
+	local chatFrame = CreateFrame("Frame", nil, frame)
+	chatFrame:SetSize(420, 118)
+	chatFrame:SetPoint("BOTTOMLEFT", chatPrompt, "TOPLEFT", 0, 6)
+	chatFrame:SetFrameLevel(310)
+	chatFrame:EnableMouse(false)
+	chatFrame:Hide()
+	local chatBg = chatFrame:CreateTexture(nil, "BACKGROUND")
+	chatBg:SetAllPoints()
+	chatBg:SetColorTexture(0.04, 0.03, 0.02, 0.78)
+	chatText = chatFrame:CreateFontString(nil, "OVERLAY")
+	H.SetFont(chatText, FONT_BODY, 14)
+	chatText:SetTextColor(0.93, 0.86, 0.7)
+	chatText:SetJustifyH("LEFT")
+	chatText:SetJustifyV("BOTTOM")
+	chatText:SetWordWrap(true)
+	chatText:SetPoint("TOPLEFT", 12, -8)
+	chatText:SetPoint("BOTTOMRIGHT", -12, 8)
+	chatText:SetShadowColor(0, 0, 0, 1)
 	chatPrompt:EnableMouse(true)
 	local promptBg = chatPrompt:CreateTexture(nil, "BACKGROUND")
 	promptBg:SetAllPoints()
 	promptBg:SetColorTexture(0.04, 0.03, 0.02, 0.82)
-	chatPlaceholder = chatPrompt:CreateFontString(nil, "OVERLAY")
-	H.SetFont(chatPlaceholder, FONT_BODY, 14)
+	chatPlaceholder = chatPrompt:CreateFontString(nil, "ARTWORK")
+	H.SetFont(chatPlaceholder, FONT_BODY, 15)
 	chatPlaceholder:SetTextColor(0.72, 0.64, 0.46)
 	chatPlaceholder:SetPoint("LEFT", 12, 0)
 	chatPlaceholder:SetText("Enter to speak")
-	chatEntry = CreateFrame("EditBox", nil, chatPrompt)
-	chatEntry:SetAllPoints()
-	chatEntry:SetFrameLevel(301)
+	chatEntry = CreateFrame("EditBox", nil, frame)
+	chatEntry:SetPoint("TOPLEFT", chatPrompt, "TOPLEFT", 0, 0)
+	chatEntry:SetPoint("BOTTOMRIGHT", chatPrompt, "BOTTOMRIGHT", 0, 0)
+	chatEntry:SetFrameLevel(320)
+	chatEntry:EnableMouse(true)
 	chatEntry:SetAutoFocus(false)
 	chatEntry:SetMaxLetters(255)
-	chatEntry:SetTextInsets(12, 8, 0, 0)
-	H.SetFont(chatEntry, FONT_BODY, 14)
-	chatEntry:SetTextColor(0.96, 0.9, 0.75)
+	chatEntry:SetTextInsets(12, 10, 2, 2)
+	pcall(chatEntry.SetMultiLine, chatEntry, false)
+	pcall(chatEntry.SetJustifyH, chatEntry, "LEFT")
+	pcall(chatEntry.SetJustifyV, chatEntry, "MIDDLE")
+	ApplyChatEntryFont()
+	pcall(chatEntry.SetPropagateKeyboardInput, chatEntry, false)
 	chatEntry:SetScript("OnEnterPressed", function(self)
-		local text = self:GetText() or ""
-		self:SetText("")
-		self:ClearFocus()
-		SendChatLine(text)
-		UpdateChatPlaceholder()
+		SubmitChatEntry(self)
+	end)
+	chatEntry:SetScript("OnKeyDown", function(self, key)
+		if key == "ENTER" then
+			SubmitChatEntry(self)
+		end
 	end)
 	chatEntry:SetScript("OnEscapePressed", function(self)
 		self:SetText("")
 		self:ClearFocus()
 		UpdateChatPlaceholder()
 	end)
-	chatEntry:SetScript("OnEditFocusGained", UpdateChatPlaceholder)
+	chatEntry:SetScript("OnEditFocusGained", function()
+		ApplyChatEntryFont()
+		UpdateChatPlaceholder()
+	end)
 	chatEntry:SetScript("OnEditFocusLost", UpdateChatPlaceholder)
 	chatEntry:SetScript("OnTextChanged", UpdateChatPlaceholder)
+	chatEntry:SetScript("OnMouseDown", function(self)
+		self:SetFocus()
+	end)
 	chatPrompt:SetScript("OnMouseDown", function()
 		FocusChatEntry()
 	end)
@@ -1692,8 +2327,10 @@ local function Build()
 		FlickerFire(elapsed)
 		UpdateTimer()
 		SyncChatEdit()
+		ApplyGameChat()
 	end)
 	frame:SetScript("OnHide", function()
+		RestoreGameChat()
 		RestoreChatEdit()
 		if chatEntry then
 			chatEntry:SetText("")
@@ -1723,6 +2360,10 @@ local function Build()
 		end
 		fireLoaded = false
 		currentEntries = {}
+		lastChatLine = nil
+		pendingEcho = nil
+		pendingEchoAt = nil
+		pendingToken = nil
 		for i = #chatLines, 1, -1 do
 			chatLines[i] = nil
 		end
@@ -1770,6 +2411,10 @@ function H.Scene:Present(payload)
 	if chatPrompt and not (liftedEdit and liftedEdit:IsShown()) then
 		chatPrompt:Show()
 	end
+	if chatEntry then
+		chatEntry:Show()
+		ApplyChatEntryFont()
+	end
 	titleText:SetText(payload.title or "Campfire Hangout")
 	subtitleText:SetText(payload.subtitle or "")
 	footerText:SetText(payload.footer or "Escape or right-click to return")
@@ -1778,6 +2423,7 @@ function H.Scene:Present(payload)
 	ApplyEntries(payload.entries or {}, true)
 	Layout()
 	UpdateTimer()
+	ApplyGameChat()
 end
 
 function H.Scene:Update(payload)
@@ -1802,6 +2448,7 @@ function H.Scene:Update(payload)
 		Layout()
 	end
 	UpdateTimer()
+	ApplyGameChat()
 end
 
 function H.Scene:HideScene()
@@ -1837,6 +2484,10 @@ end
 
 function H.Scene:ShowChat(speaker, text)
 	ShowChat(speaker, text)
+end
+
+function H.Scene:ApplyGameChat()
+	ApplyGameChat()
 end
 
 function H.Scene:PlayLocal(token)

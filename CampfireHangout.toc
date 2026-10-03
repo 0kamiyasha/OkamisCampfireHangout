@@ -1,8 +1,9 @@
 ## Interface: 16001
+## X-Curse-Project-ID: 1724968
 ## Title: Campfire Hangout
 ## Notes: Standing lineup while Welcoming Campfire is active
 ## Author: xOkamiyasha
-## Version: 0.2.0
+## Version: @project-version@
 ## OptionalDeps: LibSharedMedia-3.0
 ## SavedVariables: CampfireHangoutDB
 ## IconTexture: Interface\Icons\Spell_Fire_Fire
