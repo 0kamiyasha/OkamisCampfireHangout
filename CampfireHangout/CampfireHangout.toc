@@ -1,0 +1,15 @@
+## Interface: 16001
+## Title: Campfire Hangout
+## Notes: Standing lineup while Welcoming Campfire is active
+## Author: Campfire Hangout
+## Version: 0.2.0
+## OptionalDeps: LibSharedMedia-3.0
+## SavedVariables: CampfireHangoutDB
+## IconTexture: Interface\Icons\Spell_Fire_Fire
+
+# Copy this folder into the Forever client's Interface\AddOns directory, then /reload.
+# Preview with /cfh. It also opens on its own when you gain Welcoming Campfire.
+
+Util.lua
+Scene.lua
+Core.lua
