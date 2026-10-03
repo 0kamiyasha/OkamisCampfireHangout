@@ -8,8 +8,9 @@ local CAMPFIRE_FILE = 189705
 local CAMPFIRE_PATH = "world/azeroth/elwynn/passivedoodads/campfire/elwynncampfire.m2"
 local BACKDROP_PATH = "Interface\\AddOns\\" .. H.NAME .. "\\Textures\\CampfireBackdrop"
 local BACKDROP_ASPECT = 1024 / 419
--- Center of the flames in CampfireBackdrop, as fractions of that image.
-local PAINTED_FIRE = { u = 0.511, v = 0.845, w = 0.10, h = 0.20 }
+-- The painted pit in CampfireBackdrop: logs, stones, and flames.
+-- u,v is the center; w,h is the span, as fractions of that image.
+local PAINTED_FIRE = { u = 0.512, v = 0.90, w = 0.36, h = 0.50 }
 local BACKDROP_FALLBACK = "Interface\\Glues\\LoadingScreens\\LoadScreenRuinedCity"
 
 -- Paper-doll fallback. /cfh cam overrides distance and z.
@@ -1348,9 +1349,10 @@ local function PoseCampfire()
 	end
 	pcall(function()
 		fireModel:SetPortraitZoom(0)
-		fireModel:SetCamDistanceScale(1.05)
-		fireModel:SetPosition(0, 0, -0.2)
-		fireModel:SetFacing(0.55)
+		-- Far enough back that the stone ring and logs fit in the frame.
+		fireModel:SetCamDistanceScale(2.15)
+		fireModel:SetPosition(0, 0, 0)
+		fireModel:SetFacing(0.4)
 	end)
 end
 
