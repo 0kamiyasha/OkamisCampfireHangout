@@ -466,7 +466,7 @@ local function LayoutDolls()
 			slot.frame:SetSize(sw, sh)
 			slot.frame:SetPoint("BOTTOM", frame, "BOTTOMLEFT", cx, feetY)
 
-			local above = feetY + sh * 0.60
+			local above = feetY + sh * 0.78
 			slot.class:ClearAllPoints()
 			slot.class:SetWidth(math.max(sw, 90))
 			slot.class:SetPoint("BOTTOM", frame, "BOTTOMLEFT", cx, above)

@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: Campfire Hangout
 ## Notes: Standing lineup while Welcoming Campfire is active
-## Author: Campfire Hangout
+## Author: xOkamiyasha
 ## Version: 0.2.0
 ## OptionalDeps: LibSharedMedia-3.0
 ## SavedVariables: CampfireHangoutDB
