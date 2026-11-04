@@ -915,6 +915,7 @@ local chatPlaceholder
 local chatFont
 local chatSending = false
 local lastChatLine
+local lastChatLineAt
 local pendingEcho
 local pendingEchoAt
 local pendingToken
@@ -978,6 +979,11 @@ local function ShowBubble(slot, text)
 	slot.bubbleFrame:Raise()
 end
 
+local function GameChatWanted()
+	local saved = CampfireHangoutDB
+	return type(saved) == "table" and saved.showGameChat == true and frame and frame:IsShown()
+end
+
 local function RefreshChatLog()
 	if not chatText then
 		return
@@ -996,13 +1002,13 @@ local function RefreshChatLog()
 end
 
 local function AppendChatLine(line)
-	if line == lastChatLine then
-		return
-	end
-	if #chatLines > 0 and chatLines[#chatLines] == line then
+	-- A chat echo can arrive after the fallback line was logged. Don't log it twice.
+	local now = GetTime()
+	if line == lastChatLine and lastChatLineAt and (now - lastChatLineAt) < 3 then
 		return
 	end
 	lastChatLine = line
+	lastChatLineAt = now
 	chatLines[#chatLines + 1] = line
 	while #chatLines > 5 do
 		table.remove(chatLines, 1)
@@ -1017,6 +1023,7 @@ local function ReplaceChatLine(line)
 		chatLines[1] = line
 	end
 	lastChatLine = line
+	lastChatLineAt = GetTime()
 	RefreshChatLog()
 end
 
@@ -1519,7 +1526,12 @@ local function SendChatLine(text)
 		end
 		chatSending = false
 	end
-	if not sent then
+	if slash then
+		-- Never fall back to /say, or a command like /g would be spoken aloud.
+		if not sent then
+			H.Print("Couldn't run that command here. Close the hangout and try it in normal chat.")
+		end
+	elseif not sent then
 		if C_ChatInfo and type(C_ChatInfo.SendChatMessage) == "function" then
 			sent = pcall(C_ChatInfo.SendChatMessage, text, "SAY")
 		end
@@ -1648,11 +1660,6 @@ end
 local raisedChat = {}
 local chatHost
 local PlaceHangoutEntry
-
-local function GameChatWanted()
-	local saved = CampfireHangoutDB
-	return type(saved) == "table" and saved.showGameChat == true and frame and frame:IsShown()
-end
 
 local function RestorePoints(widget, points)
 	widget:ClearAllPoints()
@@ -2363,6 +2370,7 @@ local function Build()
 		fireLoaded = false
 		currentEntries = {}
 		lastChatLine = nil
+		lastChatLineAt = nil
 		pendingEcho = nil
 		pendingEchoAt = nil
 		pendingToken = nil

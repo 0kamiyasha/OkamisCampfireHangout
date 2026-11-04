@@ -918,6 +918,7 @@ events:RegisterEvent("CHAT_MSG_PARTY_LEADER")
 events:RegisterEvent("CHAT_MSG_RAID")
 events:RegisterEvent("CHAT_MSG_RAID_LEADER")
 events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT")
+events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT_LEADER")
 
 events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 	if event == "ADDON_LOADED" then
@@ -971,7 +972,7 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 		return
 	end
 
-	if event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_EMOTE" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER" or event == "CHAT_MSG_INSTANCE_CHAT" then
+	if event == "CHAT_MSG_SAY" or event == "CHAT_MSG_YELL" or event == "CHAT_MSG_EMOTE" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" or event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER" or event == "CHAT_MSG_INSTANCE_CHAT" or event == "CHAT_MSG_INSTANCE_CHAT_LEADER" then
 		if H.Scene:IsShown() and H.Scene.ShowChat then
 			H.Scene:ShowChat(arg2, arg1)
 		end
@@ -979,7 +980,7 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 	end
 
 	if event == "PLAYER_REGEN_DISABLED" then
-		if H.Scene:IsShown() and mode == "live" then
+		if H.Scene:IsShown() then
 			CloseScene("combat")
 		end
 		return
