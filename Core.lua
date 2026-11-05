@@ -400,7 +400,10 @@ local function Broadcast(message, includeGuild)
 			return
 		end
 		local function send(channel)
-			pcall(C_ChatInfo.SendAddonMessage, H.PREFIX, message, channel)
+			local ok, result = pcall(C_ChatInfo.SendAddonMessage, H.PREFIX, message, channel)
+			if message:sub(1, 2) == "e:" then
+				H.Trace("sent", message, "on", channel, "ok=", ok, "result=", result)
+			end
 		end
 		if LE_PARTY_CATEGORY_INSTANCE and H.SafeTrue(IsInGroup, LE_PARTY_CATEGORY_INSTANCE) then
 			send("INSTANCE_CHAT")
@@ -490,9 +493,9 @@ local function RememberAnnouncement(sender, message)
 	if type(sender) ~= "string" then
 		return
 	end
+	local short = H.ShortName(sender)
 	if message == "0" then
 		announcers[sender] = nil
-		local short = sender:match("^([^%-]+)")
 		if short then
 			announcers[short] = nil
 		end
@@ -500,7 +503,6 @@ local function RememberAnnouncement(sender, message)
 	end
 	local now = GetTime()
 	announcers[sender] = now
-	local short = sender:match("^([^%-]+)")
 	if short and short ~= sender then
 		announcers[short] = now
 	end
@@ -602,6 +604,21 @@ local function HandleSlash(message)
 		return
 	end
 
+	if cmd == "trace" then
+		H.tracing = not H.tracing
+		H.Print(H.tracing and "Emote trace on." or "Emote trace off.")
+		return
+	end
+
+	if cmd == "animtest" then
+		if not H.Scene:IsShown() then
+			H.Print("Open the hangout first.")
+			return
+		end
+		H.Scene:TestAnimations()
+		return
+	end
+
 	if cmd == "debug" then
 		local aura = FindBuff("player")
 		local expires = Expiration(aura)
@@ -633,7 +650,7 @@ local function HandleSlash(message)
 		return
 	end
 
-	H.Print("Commands: /cfh, /cfh test [count], /cfh font [name], /cfh on, /cfh off, /cfh cam <distance> <height>, /cfh debug")
+	H.Print("Commands: /cfh, /cfh test [count], /cfh font [name], /cfh on, /cfh off, /cfh cam <distance> <height>, /cfh debug, /cfh trace, /cfh animtest")
 end
 
 local function RegisterOptions()
@@ -921,7 +938,7 @@ events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT")
 events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT_LEADER")
 events:RegisterEvent("CHAT_MSG_TEXT_EMOTE")
 
-events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
+events:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4)
 	if event == "ADDON_LOADED" then
 		if arg1 ~= H.NAME then
 			return
@@ -960,6 +977,7 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 		if arg1 ~= H.PREFIX then
 			return
 		end
+		H.Trace("addon message", arg2, "on", arg3, "from", arg4, "open=", H.Scene:IsShown())
 		if type(arg2) == "string" and not H.Sealed(arg2) and arg2:sub(1, 2) == "e:" then
 			if H.Scene:IsShown() and H.Scene.PlayFromSender then
 				H.Scene:PlayFromSender(arg4, arg2:sub(3))

@@ -24,6 +24,24 @@ function H.Print(text)
 	chat:AddMessage("|cffe7c98aCampfire Hangout|r  " .. tostring(text))
 end
 
+-- Chat senders can be "Name Surname-Realm", but UnitName returns only "Name".
+function H.ShortName(name)
+	return name:match("^[^%s%-]+")
+end
+
+-- Session-only emote trace, toggled with /cfh trace.
+function H.Trace(...)
+	if not H.tracing then
+		return
+	end
+	local parts = {}
+	for i = 1, select("#", ...) do
+		local value = select(i, ...)
+		parts[i] = H.Sealed(value) and "<secret>" or tostring(value)
+	end
+	H.Print("|cff88ccff" .. table.concat(parts, " ") .. "|r")
+end
+
 -- pcall a unit API. Secret booleans must not be used in an if-test.
 function H.SafeBool(fn, ...)
 	if type(fn) ~= "function" then

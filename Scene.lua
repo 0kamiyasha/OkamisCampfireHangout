@@ -976,21 +976,19 @@ local function NameMatches(unit, speaker)
 	if type(speaker) ~= "string" or H.Sealed(speaker) then
 		return false
 	end
-	local ok, name, realm = pcall(UnitName, unit)
+	local ok, name, second = pcall(UnitName, unit)
 	if not ok or type(name) ~= "string" or H.Sealed(name) then
 		return false
 	end
-	if speaker == name then
+	local base = speaker:match("^[^%-]+") or speaker
+	if base == name then
 		return true
 	end
-	local short = speaker:match("^([^%-]+)")
-	if short == name then
-		return true
+	-- On Forever the second value is the surname, and first names can repeat.
+	if type(second) == "string" and second ~= "" and not H.Sealed(second) then
+		return base == (name .. " " .. second) or speaker == (name .. "-" .. second)
 	end
-	if type(realm) == "string" and realm ~= "" and not H.Sealed(realm) then
-		return speaker == (name .. "-" .. realm)
-	end
-	return false
+	return H.ShortName(base) == H.ShortName(name)
 end
 
 local function TickBubbles()
@@ -1101,13 +1099,17 @@ local function AnimateSlot(index, anim)
 	end
 	local now = GetTime()
 	if slot.emoteAnim == anim and slot.emoteAt and (now - slot.emoteAt) < EMOTE_REPEAT_WINDOW then
+		H.Trace("  slot", index, "skipped as a duplicate")
 		return
 	end
 	slot.emoteAnim = anim
 	slot.emoteAt = now
 	local token = {}
 	slot.emoteToken = token
-	pcall(model.SetAnimation, model, anim)
+	local ok, err = pcall(model.SetAnimation, model, anim)
+	if H.tracing then
+		H.Trace("  slot", index, "SetAnimation", anim, "ok=", ok, err, "hasAnimation=", select(2, pcall(model.HasAnimation, model, anim)))
+	end
 	C_Timer.After(EMOTE_MAX_SECONDS, function()
 		if slot.emoteToken == token then
 			slot.emoteToken = nil
@@ -1119,14 +1121,20 @@ end
 local function PlayToken(token, speaker)
 	local anim = EMOTE_ANIMS[token]
 	if not anim then
+		H.Trace("unknown emote", token)
 		return
 	end
+	H.Trace("emote", token, "from", speaker or "self", "dolls=", #currentEntries)
 	for i, entry in ipairs(currentEntries) do
 		local mine = entry.unit == "player" or H.SafeTrue(UnitIsUnit, entry.unit, "player")
 		local play = mine
 		if speaker then
 			-- Our own emote already played locally. Ignore it coming back to us.
 			play = not mine and NameMatches(entry.unit, speaker)
+		end
+		if H.tracing then
+			local _, name, second = pcall(UnitName, entry.unit)
+			H.Trace("  slot", i, entry.unit, "name=", name, second, "mine=", mine, "play=", play)
 		end
 		if play then
 			AnimateSlot(i, anim)
@@ -1135,10 +1143,20 @@ local function PlayToken(token, speaker)
 end
 
 local function PlayTextEmote(speaker, text)
-	if type(text) ~= "string" or H.Sealed(text) then
+	H.Trace("emote text from", speaker, ":", text)
+	if type(text) ~= "string" or H.Sealed(text) or type(speaker) ~= "string" or H.Sealed(speaker) then
 		return
 	end
-	local verb = text:match("^%S+%s+(%a+)")
+	-- The line starts with the speaker's name, which can be more than one word.
+	local verb
+	for _, name in ipairs({ speaker, speaker:match("^[^%-]+") }) do
+		if text:sub(1, #name) == name then
+			verb = text:sub(#name + 1):match("^%s+(%a+)")
+			if verb then
+				break
+			end
+		end
+	end
 	local token = verb and TEXT_EMOTES[verb]
 	if token then
 		PlayToken(token, speaker)
@@ -2558,6 +2576,13 @@ end
 
 function H.Scene:PlayTextEmote(sender, text)
 	PlayTextEmote(sender, text)
+end
+
+-- Plays straight on every doll, skipping messaging and name matching.
+function H.Scene:TestAnimations()
+	for i = 1, #currentEntries do
+		AnimateSlot(i, EMOTE_ANIMS.WAVE)
+	end
 end
 
 function H.Scene:SelectFont(name)
