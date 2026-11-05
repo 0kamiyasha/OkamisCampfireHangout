@@ -173,12 +173,21 @@ local function AssignFacing(entries)
 	end
 end
 
+-- Players sit at the fire to earn the buff, and SetUnit can copy that pose.
+-- Animation 0 is the standing idle.
+local function StandModel(slot)
+	if slot.model and not slot.emoteToken then
+		pcall(slot.model.SetAnimation, slot.model, 0)
+	end
+end
+
 local function PoseUntilReady(slot, entry)
 	local delays = { 0, 0.1, 0.25, 0.5, 1.0 }
 	for _, delay in ipairs(delays) do
 		C_Timer.After(delay, function()
 			if frame:IsShown() and slot.key == entry.key and slot.model then
 				PoseModel(slot.model, entry.facing or 0)
+				StandModel(slot)
 			end
 		end)
 	end
@@ -194,6 +203,7 @@ local function ApplyDollEntries(entries, force)
 				pcall(slot.model.ClearModel, slot.model)
 			end
 			slot.key = nil
+			slot.emoteToken = nil
 			slot.frame:Hide()
 			slot.name:Hide()
 			slot.class:Hide()
@@ -207,6 +217,7 @@ local function ApplyDollEntries(entries, force)
 			ApplyLabel(slot, entry.unit)
 			if force or slot.key ~= entry.key then
 				slot.key = entry.key
+				slot.emoteToken = nil
 				local model = slot.model
 				pcall(function()
 					model:ClearModel()
@@ -840,6 +851,16 @@ local function BuildDollSlot(parent, textParent, index)
 		key = nil,
 	}
 
+	pcall(model.SetScript, model, "OnAnimFinished", function()
+		local slot = slots[index]
+		-- Skip a finish left over from the animation the emote just replaced.
+		if slot.emoteToken and slot.emoteAt and (GetTime() - slot.emoteAt) < 0.3 then
+			return
+		end
+		slot.emoteToken = nil
+		StandModel(slot)
+	end)
+
 	local bubbleFrame = CreateFrame("Frame", nil, parent)
 	bubbleFrame:SetSize(220, 48)
 	bubbleFrame:SetFrameLevel(340)
@@ -937,6 +958,19 @@ local EMOTE_ANIMS = {
 	CHEER = 68,
 	LAUGH = 70,
 }
+-- The game's emote line reaches nearby players without a group or guild.
+-- These are enUS verbs. Other locales still get emotes over group and guild.
+local TEXT_EMOTES = {
+	waves = "WAVE",
+	nods = "YES",
+	bows = "BOW",
+	cheers = "CHEER",
+	laughs = "LAUGH",
+}
+-- One emote can arrive on several addon channels and as chat text.
+local EMOTE_REPEAT_WINDOW = 1
+-- Back to standing by then, even if OnAnimFinished never fires.
+local EMOTE_MAX_SECONDS = 4
 
 local function NameMatches(unit, speaker)
 	if type(speaker) ~= "string" or H.Sealed(speaker) then
@@ -1061,22 +1095,24 @@ end
 
 local function AnimateSlot(index, anim)
 	local slot = slots[index]
-	local entry = currentEntries[index]
 	local model = slot and slot.model
-	if not model or not entry then
+	if not model or not currentEntries[index] then
 		return
 	end
+	local now = GetTime()
+	if slot.emoteAnim == anim and slot.emoteAt and (now - slot.emoteAt) < EMOTE_REPEAT_WINDOW then
+		return
+	end
+	slot.emoteAnim = anim
+	slot.emoteAt = now
+	local token = {}
+	slot.emoteToken = token
 	pcall(model.SetAnimation, model, anim)
-	local key = slot.key
-	C_Timer.After(3, function()
-		if not frame:IsShown() or slot.key ~= key then
-			return
+	C_Timer.After(EMOTE_MAX_SECONDS, function()
+		if slot.emoteToken == token then
+			slot.emoteToken = nil
+			StandModel(slot)
 		end
-		pcall(function()
-			model:ClearModel()
-			model:SetUnit(entry.unit)
-		end)
-		PoseModel(model, entry.facing or 0)
 	end)
 end
 
@@ -1086,15 +1122,26 @@ local function PlayToken(token, speaker)
 		return
 	end
 	for i, entry in ipairs(currentEntries) do
-		local play = false
+		local mine = entry.unit == "player" or H.SafeTrue(UnitIsUnit, entry.unit, "player")
+		local play = mine
 		if speaker then
-			play = NameMatches(entry.unit, speaker)
-		else
-			play = entry.unit == "player" or H.SafeTrue(UnitIsUnit, entry.unit, "player")
+			-- Our own emote already played locally. Ignore it coming back to us.
+			play = not mine and NameMatches(entry.unit, speaker)
 		end
 		if play then
 			AnimateSlot(i, anim)
 		end
+	end
+end
+
+local function PlayTextEmote(speaker, text)
+	if type(text) ~= "string" or H.Sealed(text) then
+		return
+	end
+	local verb = text:match("^%S+%s+(%a+)")
+	local token = verb and TEXT_EMOTES[verb]
+	if token then
+		PlayToken(token, speaker)
 	end
 end
 
@@ -2350,6 +2397,7 @@ local function Build()
 			local slot = slots[i]
 			if slot then
 				slot.key = nil
+				slot.emoteToken = nil
 				slot.name:Hide()
 				slot.class:Hide()
 				if slot.bubbleFrame then
@@ -2506,6 +2554,10 @@ end
 
 function H.Scene:PlayFromSender(sender, token)
 	PlayToken(token, sender)
+end
+
+function H.Scene:PlayTextEmote(sender, text)
+	PlayTextEmote(sender, text)
 end
 
 function H.Scene:SelectFont(name)

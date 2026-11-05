@@ -919,6 +919,7 @@ events:RegisterEvent("CHAT_MSG_RAID")
 events:RegisterEvent("CHAT_MSG_RAID_LEADER")
 events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT")
 events:RegisterEvent("CHAT_MSG_INSTANCE_CHAT_LEADER")
+events:RegisterEvent("CHAT_MSG_TEXT_EMOTE")
 
 events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 	if event == "ADDON_LOADED" then
@@ -968,6 +969,13 @@ events:SetScript("OnEvent", function(_, event, arg1, arg2, _, arg4)
 		RememberAnnouncement(arg4, arg2)
 		if H.Scene:IsShown() then
 			RefreshOpenScene()
+		end
+		return
+	end
+
+	if event == "CHAT_MSG_TEXT_EMOTE" then
+		if H.Scene:IsShown() then
+			H.Scene:PlayTextEmote(arg2, arg1)
 		end
 		return
 	end
